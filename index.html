@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Farm Field Mapper</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@100..900&display=swap" rel="stylesheet">
+  <style>
+    body {
+        font-family: "Roboto Slab", serif;
+        font-optical-sizing: auto;
+        font-weight: 400;
+        font-style: normal;
+        font-size: 16px;
+    }
+    span {
+        color: grey;
+    }
+    button {
+        background: green;
+        color: white;
+        border-radius:5px;
+        box-shadow: none;
+        border: none;
+        padding: 5px 10px;
+        font-weight: 600;
+        font-size: 14px;
+    }
+    button.red {
+        background-color: red;
+    }
+    #map {
+      height: 80vh;
+    }
+    #controls {
+      margin: 10px;
+    }
+    .label {
+      background-color: transparent;
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-size: 14px;
+      font-weight: bold;
+    }
+    .leaflet-popup-content-wrapper {
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="controls">
+      <h2>FarmMappr <span>- a More than Machines experiment.</span></h2>
+    <button id="downloadBtn">Download GeoJSON</button>
+    <input type="file" id="uploadInput" accept=".geojson" style="display:none" />
+    <button id="uploadBtn">Upload GeoJSON</button>
+    <button id="resetBtn" class="red">Reset Map</button>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+  <script>
+    const map = L.map('map').fitWorld();
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    map.locate({ setView: true, maxZoom: 16 });
+
+    function onLocationFound(e) {
+      const radius = e.accuracy / 2;
+      L.marker(e.latlng).addTo(map)
+        .bindPopup(`You are within ${radius} meters from this point`).openPopup();
+      L.circle(e.latlng, radius).addTo(map);
+    }
+
+    function onLocationError(e) {
+      alert(e.message);
+    }
+
+    map.on('locationfound', onLocationFound);
+    map.on('locationerror', onLocationError);
+
+    const drawnItems = new L.FeatureGroup();
+    map.addLayer(drawnItems);
+
+    const drawControl = new L.Control.Draw({
+      edit: {
+        featureGroup: drawnItems
+      },
+      draw: {
+        polygon: true,
+        polyline: false,
+        rectangle: false,
+        circle: false,
+        marker: false,
+        circlemarker: false
+      }
+    });
+    map.addControl(drawControl);
+
+    function saveAreas() {
+      const areas = [];
+      drawnItems.eachLayer(layer => {
+        const name = layer.options.name || 'Unnamed Area';
+        const geojson = layer.toGeoJSON();
+        geojson.properties = { name };
+        areas.push(geojson);
+      });
+      localStorage.setItem('farmFields', JSON.stringify(areas));
+    }
+
+    function loadAreas() {
+      const savedAreas = JSON.parse(localStorage.getItem('farmFields'));
+      if (savedAreas) {
+        savedAreas.forEach(area => {
+          const layer = L.geoJSON(area, {
+            onEachFeature: (feature, layer) => {
+              const name = feature.properties.name;
+              layer.bindPopup(`<b>${name}</b><br><button class="edit-label">Edit Label</button>`);
+              layer.options.name = name;
+              addLabel(layer, name);
+            }
+          }).getLayers()[0];
+          drawnItems.addLayer(layer);
+        });
+      }
+    }
+
+    function addLabel(layer, name) {
+      const center = layer.getBounds().getCenter();
+      const label = L.marker(center, {
+        icon: L.divIcon({
+          className: 'label',
+          html: name,
+          iconSize: [100, 40]
+        }),
+        interactive: false
+      }).addTo(map);
+      layer.label = label;
+
+      layer.on('remove', () => map.removeLayer(label));
+      layer.on('edit', () => {
+        label.setLatLng(layer.getBounds().getCenter());
+      });
+    }
+
+    function updateLabel(layer, name) {
+      layer.options.name = name;
+      layer.label.setIcon(L.divIcon({
+        className: 'label',
+        html: name,
+        iconSize: [100, 40]
+      }));
+      layer.setPopupContent(`<b>${name}</b><br><button class="edit-label">Edit Label</button>`);
+    }
+
+    function handleEditLabel(e) {
+      const layer = e.popup._source;
+      const newName = prompt("Enter the new name of the area:", layer.options.name);
+      if (newName) {
+        updateLabel(layer, newName);
+        saveAreas();
+      }
+    }
+
+    document.getElementById('uploadInput').addEventListener('change', uploadGeoJSON);
+    document.getElementById('uploadBtn').addEventListener('click', () => {
+      document.getElementById('uploadInput').click();
+    });
+    document.getElementById('downloadBtn').addEventListener('click', downloadGeoJSON);
+    document.getElementById('resetBtn').addEventListener('click', resetMap);
+
+    map.on(L.Draw.Event.CREATED, event => {
+      const layer = event.layer;
+      const name = prompt("Enter the name of the area:");
+      if (name) {
+        layer.bindPopup(`<b>${name}</b><br><button class="edit-label">Edit Label</button>`);
+        layer.options.name = name;
+        drawnItems.addLayer(layer);
+        addLabel(layer, name);
+        saveAreas();
+      }
+    });
+
+    map.on(L.Draw.Event.EDITED, () => {
+      saveAreas();
+    });
+
+    map.on(L.Draw.Event.DELETED, () => {
+      saveAreas();
+    });
+
+    map.on('popupopen', e => {
+      const editButton = e.popup._contentNode.querySelector('.edit-label');
+      if (editButton) {
+        editButton.addEventListener('click', () => handleEditLabel(e));
+      }
+    });
+
+    function downloadGeoJSON() {
+      const areas = [];
+      drawnItems.eachLayer(layer => {
+        const name = layer.options.name || 'Unnamed Area';
+        const geojson = layer.toGeoJSON();
+        geojson.properties = { name };
+        areas.push(geojson);
+      });
+      const blob = new Blob([JSON.stringify(areas)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "farmFields.geojson";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function uploadGeoJSON(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = function(e) {
+          const geojson = JSON.parse(e.target.result);
+          localStorage.setItem('farmFields', JSON.stringify(geojson));
+          drawnItems.clearLayers();
+          L.geoJSON(geojson, {
+            onEachFeature: (feature, layer) => {
+              const name = feature.properties.name;
+              layer.bindPopup(`<b>${name}</b><br><button class="edit-label">Edit Label</button>`);
+              layer.options.name = name;
+              addLabel(layer, name);
+              drawnItems.addLayer(layer);
+            }
+          });
+        };
+        reader.readAsText(file);
+      }
+    }
+
+    function resetMap() {
+      if (confirm("Are you sure you want to reset the map? This will remove all areas and clear local storage.")) {
+        drawnItems.clearLayers();
+        localStorage.removeItem('farmFields');
+      }
+    }
+
+    loadAreas();
+  </script>
+</body>
+</html>
